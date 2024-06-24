@@ -4,6 +4,7 @@
 #include <mutex>
 #include <string_view>
 #include <vector>
+#include <deque>
 #include <base/defines.h>
 #include <base/types.h>
 
@@ -41,6 +42,8 @@ namespace ErrorCodes
         std::string message;
         /// Stacktrace for the last error.
         FramePointers trace;
+        // Query IDs of all errors.
+        std::deque<String> query_ids;
     };
     struct ErrorPair
     {

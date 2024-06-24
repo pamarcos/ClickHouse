@@ -4,6 +4,7 @@
 #include <DataTypes/DataTypeArray.h>
 #include <Storages/System/StorageSystemErrors.h>
 #include <Interpreters/Context.h>
+#include "Common/CurrentThread.h"
 #include <Common/ErrorCodes.h>
 
 
@@ -21,6 +22,7 @@ ColumnsDescription StorageSystemErrors::getColumnsDescription()
         { "last_error_message",      std::make_shared<DataTypeString>(), "Message for the last error."},
         { "last_error_trace",        std::make_shared<DataTypeArray>(std::make_shared<DataTypeUInt64>()), "A stack trace that represents a list of physical addresses where the called methods are stored."},
         { "remote",                  std::make_shared<DataTypeUInt8>(), "Remote exception (i.e. received during one of the distributed queries)."},
+        { "query_ids",               std::make_shared<DataTypeArray>(std::make_shared<DataTypeString>()), "Last max_query_ids_in_system_errors query IDs that triggered this error."},
     };
 }
 
@@ -46,6 +48,15 @@ void StorageSystemErrors::fillData(MutableColumns & res_columns, ContextPtr cont
                 res_columns[col_num++]->insert(trace_array);
             }
             res_columns[col_num++]->insert(remote);
+            {
+                Array query_ids_array;
+                query_ids_array.reserve(error.query_ids.size());
+                for (const auto & query_id : error.query_ids)
+                {
+                    query_ids_array.emplace_back(query_id);
+                }
+                res_columns[col_num++]->insert(query_ids_array);
+            }
         }
     };
 

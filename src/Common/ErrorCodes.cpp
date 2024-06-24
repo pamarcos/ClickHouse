@@ -1,5 +1,7 @@
 #include <Common/ErrorCodes.h>
 #include <Common/Exception.h>
+#include <Common/CurrentThread.h>
+#include <Interpreters/Context.h>
 #include <chrono>
 
 /** Previously, these constants were located in one enum.
@@ -690,6 +692,14 @@ namespace ErrorCodes
         error.message = message;
         error.trace = trace;
         error.error_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+        const auto & query_id = CurrentThread::getQueryId();
+        if (!query_id.empty())
+        {
+            const auto max_size = Context::getGlobalContextInstance()->getConfigRef().getUInt64("max_query_ids_in_system_errors", 100);
+            while (error.query_ids.size() >= max_size)
+                error.query_ids.pop_front();
+            error.query_ids.emplace_back(query_id);
+        }
     }
     ErrorPair ErrorPairHolder::get()
     {
