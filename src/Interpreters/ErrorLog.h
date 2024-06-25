@@ -20,6 +20,7 @@ struct ErrorLogElement
     ErrorCodes::ErrorCode code{};
     ErrorCodes::Value value{};
     bool remote{};
+    Array query_ids{};
 
     static std::string name() { return "ErrorLog"; }
     static ColumnsDescription getColumnsDescription();

@@ -695,7 +695,7 @@ namespace ErrorCodes
         const auto & query_id = CurrentThread::getQueryId();
         if (!query_id.empty())
         {
-            const auto max_size = Context::getGlobalContextInstance()->getConfigRef().getUInt64("max_query_ids_in_system_errors", 100);
+            const auto max_size = Context::getGlobalContextInstance()->getConfigRef().getUInt64("max_query_ids_in_system_errors", 10);
             while (error.query_ids.size() >= max_size)
                 error.query_ids.pop_front();
             error.query_ids.emplace_back(query_id);
