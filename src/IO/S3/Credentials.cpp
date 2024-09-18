@@ -411,13 +411,13 @@ void AWSInstanceProfileCredentialsProvider::refreshIfExpired()
 }
 
 AwsAuthSTSAssumeRoleWebIdentityCredentialsProvider::AwsAuthSTSAssumeRoleWebIdentityCredentialsProvider(
-    DB::S3::PocoHTTPClientConfiguration & aws_client_configuration, uint64_t expiration_window_seconds_)
+    DB::S3::PocoHTTPClientConfiguration & aws_client_configuration, uint64_t expiration_window_seconds_, String role_arn_)
     : logger(getLogger("AwsAuthSTSAssumeRoleWebIdentityCredentialsProvider"))
     , expiration_window_seconds(expiration_window_seconds_)
 {
     // check environment variables
     String tmp_region = Aws::Environment::GetEnv("AWS_DEFAULT_REGION");
-    role_arn = Aws::Environment::GetEnv("AWS_ROLE_ARN");
+    role_arn = role_arn_.empty() ? Aws::Environment::GetEnv("AWS_ROLE_ARN") : role_arn_;
     token_file = Aws::Environment::GetEnv("AWS_WEB_IDENTITY_TOKEN_FILE");
     session_name = Aws::Environment::GetEnv("AWS_ROLE_SESSION_NAME");
 

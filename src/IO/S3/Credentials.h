@@ -113,7 +113,7 @@ class AwsAuthSTSAssumeRoleWebIdentityCredentialsProvider : public Aws::Auth::AWS
 
 public:
     explicit AwsAuthSTSAssumeRoleWebIdentityCredentialsProvider(
-        DB::S3::PocoHTTPClientConfiguration & aws_client_configuration, uint64_t expiration_window_seconds_);
+        DB::S3::PocoHTTPClientConfiguration & aws_client_configuration, uint64_t expiration_window_seconds_, String role_arn_ = "");
 
     Aws::Auth::AWSCredentials GetAWSCredentials() override;
 

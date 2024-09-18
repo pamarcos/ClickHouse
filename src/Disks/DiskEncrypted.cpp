@@ -2,21 +2,30 @@
 
 #if USE_SSL
 #include <Disks/DiskFactory.h>
+#include <Common/Base64.h>
+#include <Common/Exception.h>
 #include <IO/FileEncryptionCommon.h>
 #include <IO/ReadBufferFromEncryptedFile.h>
 #include <IO/ReadBufferFromFileDecorator.h>
 #include <IO/ReadBufferFromString.h>
+#include <IO/S3/Credentials.h>
+#include <IO/S3Common.h>
 #include <IO/WriteBufferFromEncryptedFile.h>
 #include <boost/algorithm/hex.hpp>
 #include <Common/quoteString.h>
 #include <Common/typeid_cast.h>
 
+#include <aws/core/platform/Environment.h>
+#include <aws/core/client/AWSJsonClient.h>
+#include <aws/kms/KMSClient.h>
+#include <aws/kms/model/DecryptRequest.h>
 
 namespace DB
 {
 
 namespace ErrorCodes
 {
+    extern const int AWS_ERROR;
     extern const int BAD_ARGUMENTS;
     extern const int INCORRECT_DISK_INDEX;
     extern const int NOT_IMPLEMENTED;
@@ -39,6 +48,44 @@ namespace
         {
             throw Exception(ErrorCodes::BAD_ARGUMENTS, "Cannot read key_hex, check for valid characters [0-9a-fA-F] and length");
         }
+    }
+
+    String getDecryptedKeyUsingAwsKms(const String & key_id_arn, const String & encrypted_key, const String & role_arn)
+    {
+        auto logger = getLogger("PMO");
+        LOG_DEBUG(logger, "getDecryptedKeyUsingAwsKms for encrypted_key {}, role_arn {}", encrypted_key, role_arn);
+
+        auto config = S3::ClientFactory::instance().createClientConfiguration(
+            Aws::Environment::GetEnv("AWS_DEFAULT_REGION"),
+            RemoteHostFilter(),
+            /* s3_max_redirects = */ 10,
+            /* s3_retry_attempts = */ 10,
+            /* enable_s3_requests_logging = */ false,
+            /* for_disk_s3 = */ false,
+            /* get_request_throttler = */ {},
+            /* put_request_throttler = */ {}
+        );
+
+        S3::AwsAuthSTSAssumeRoleWebIdentityCredentialsProvider aws(config, 120);
+        auto credentials = aws.GetAWSCredentials();
+
+        LOG_DEBUG(logger, "access_key_id {}, secret_access_key {}, session_token {}", credentials.GetAWSAccessKeyId(), credentials.GetAWSSecretKey(), credentials.GetSessionToken());
+
+        LOG_DEBUG(logger, "Decrypting text...");
+        Aws::KMS::KMSClient kms_client(credentials, config);
+        Aws::KMS::Model::DecryptRequest decrypt_request;
+        decrypt_request.WithKeyId(key_id_arn).WithCiphertextBlob(Aws::Utils::ByteBuffer(reinterpret_cast<const unsigned char *>(encrypted_key.data()), encrypted_key.size()));
+        auto decrypt_outcome = kms_client.Decrypt(decrypt_request);
+        if (decrypt_outcome.IsSuccess())
+        {
+            const auto decrypted_blob = decrypt_outcome.GetResult().GetPlaintext();
+            const auto text = base64Decode(String(reinterpret_cast<const char*>(decrypted_blob.GetUnderlyingData()), decrypted_blob.GetLength()));
+            LOG_DEBUG(logger, "Decrypted text: \"{}\"", text);
+
+            return text;
+        }
+
+        throw Exception(ErrorCodes::AWS_ERROR, "Error decrypting blob using key_id {}: {}", key_id_arn, decrypt_outcome.GetError().GetMessage());
     }
 
     /// Reads encryption keys from the configuration.
@@ -68,6 +115,22 @@ namespace
                 String key_id_path = key_path + "[@id]";
                 if (config.has(key_id_path))
                     key_id = config.getUInt64(key_id_path);
+            }
+            else if ((config_key == "key_aws") || config_key.starts_with("key_aws["))
+            {
+                String key_path = config_prefix + "." + config_key;
+                String key_id_path = key_path + "[@id]";
+                if (config.has(key_id_path))
+                    key_id = config.getUInt64(key_id_path);
+                String key_id_arn_path = key_path + "[@key_id]";
+                if (!config.has(key_id_arn_path))
+                    throw Exception(ErrorCodes::BAD_ARGUMENTS, "Missing key_id for key_aws {}", config_key);
+                String key_id_arn = config.getString(key_id_arn_path);
+                String role_arn;
+                String role_arn_path = key_path + "[@role]";
+                if (config.has(role_arn_path))
+                    role_arn = config.getString(role_arn_path);
+                key = getDecryptedKeyUsingAwsKms(key_id_arn, config.getString(key_path), role_arn);
             }
             else
                 continue;
@@ -99,6 +162,7 @@ namespace
     {
         String key_path = config_prefix + ".current_key";
         String key_hex_path = config_prefix + ".current_key_hex";
+        String key_aws_path = config_prefix + ".current_key_aws";
         String key_id_path = config_prefix + ".current_key_id";
 
         if (config.has(key_path) + config.has(key_hex_path) + config.has(key_id_path) > 1)
@@ -128,6 +192,20 @@ namespace
         else if (config.has(key_hex_path))
         {
             String current_key = unhexKey(config.getString(key_hex_path));
+            check_current_key_found(current_key);
+            return current_key;
+        }
+        else if (config.has(key_aws_path))
+        {
+            String key_id_arn_path = key_aws_path + "[@key_id]";
+            if (!config.has(key_id_arn_path))
+                throw Exception(ErrorCodes::BAD_ARGUMENTS, "Missing key_id for key_aws {}", key_aws_path);
+            String key_id_arn = config.getString(key_id_arn_path);
+            String role_arn;
+            String role_arn_path = key_aws_path + "[@role]";
+            if (!config.has(role_arn_path))
+                role_arn = config.getString(role_arn_path);
+            String current_key = getDecryptedKeyUsingAwsKms(key_id_arn, config.getString(key_aws_path), role_arn);
             check_current_key_found(current_key);
             return current_key;
         }
@@ -180,7 +258,7 @@ namespace
             throw Exception(ErrorCodes::BAD_ARGUMENTS, "Disk path must ends with '/', but '{}' doesn't.", quoteString(out_path));
     }
 
-    /// Parses the settings of an ecnrypted disk from the configuration.
+    /// Parses the settings of an encrypted disk from the configuration.
     std::unique_ptr<const DiskEncryptedSettings> parseDiskEncryptedSettings(
         const String & disk_name,
         const Poco::Util::AbstractConfiguration & config,
