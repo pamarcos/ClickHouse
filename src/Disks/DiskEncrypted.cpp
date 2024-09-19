@@ -53,7 +53,6 @@ namespace
     String getDecryptedKeyUsingAwsKms(const String & key_id_arn, const String & encrypted_key)
     {
         auto logger = getLogger("PMO");
-        LOG_DEBUG(logger, "getDecryptedKeyUsingAwsKms for encrypted_key {}", encrypted_key);
 
         auto config = S3::ClientFactory::instance().createClientConfiguration(
             Aws::Environment::GetEnv("AWS_DEFAULT_REGION"),
@@ -69,28 +68,28 @@ namespace
         S3::AwsAuthSTSAssumeRoleWebIdentityCredentialsProvider aws(config, 120);
         auto credentials = aws.GetAWSCredentials();
 
-        LOG_DEBUG(logger, "access_key_id {}, secret_access_key {}, session_token {}", credentials.GetAWSAccessKeyId(), credentials.GetAWSSecretKey(), credentials.GetSessionToken());
-
         const auto new_kms_endpoint = Aws::Environment::GetEnv("AWS_KMS_ENDPOINT");
         if (!new_kms_endpoint.empty())
         {
             LOG_INFO(getLogger("DiskEncrypted"), "Using AWS KMS endpoint: {}", new_kms_endpoint);
             config.endpointOverride = new_kms_endpoint;
         }
+
         Aws::KMS::KMSClient kms_client(credentials, config);
         Aws::KMS::Model::DecryptRequest decrypt_request;
-        decrypt_request.WithKeyId(key_id_arn).WithCiphertextBlob(Aws::Utils::ByteBuffer(reinterpret_cast<const unsigned char *>(encrypted_key.data()), encrypted_key.size()));
+        const auto encrypted_key_plain = base64Decode(encrypted_key);
+        decrypt_request.WithKeyId(key_id_arn).WithCiphertextBlob(Aws::Utils::ByteBuffer(reinterpret_cast<const unsigned char *>(encrypted_key_plain.data()), encrypted_key_plain.size()));
         auto decrypt_outcome = kms_client.Decrypt(decrypt_request);
         if (decrypt_outcome.IsSuccess())
         {
-            const auto decrypted_blob = decrypt_outcome.GetResult().GetPlaintext();
-            const auto text = base64Decode(String(reinterpret_cast<const char*>(decrypted_blob.GetUnderlyingData()), decrypted_blob.GetLength()));
-            LOG_DEBUG(logger, "Decrypted text: \"{}\"", text);
+            const auto decrypted_buffer = decrypt_outcome.GetResult().GetPlaintext();
+            const auto decrypted_key = String(reinterpret_cast<const char *>(decrypted_buffer.GetUnderlyingData()), decrypted_buffer.GetLength());
+            LOG_DEBUG(logger, "Decrypted key: \"{}\"", decrypted_key);
 
-            return text;
+            return decrypted_key;
         }
 
-        throw Exception(ErrorCodes::AWS_ERROR, "Error decrypting blob using key_id {}: {}", key_id_arn, decrypt_outcome.GetError().GetMessage());
+        throw Exception(ErrorCodes::AWS_ERROR, "Error decrypting key using key_id {}: {}", key_id_arn, decrypt_outcome.GetError().GetMessage());
     }
 
     /// Reads encryption keys from the configuration.
@@ -127,7 +126,7 @@ namespace
                 String key_id_path = key_path + "[@id]";
                 if (config.has(key_id_path))
                     key_id = config.getUInt64(key_id_path);
-                String key_id_arn_path = key_path + "[@key_id]";
+                String key_id_arn_path = key_path + "[@key_arn]";
                 if (!config.has(key_id_arn_path))
                     throw Exception(ErrorCodes::BAD_ARGUMENTS, "Missing key_id for key_aws {}", config_key);
                 String key_id_arn = config.getString(key_id_arn_path);
@@ -198,7 +197,7 @@ namespace
         }
         else if (config.has(key_aws_path))
         {
-            String key_id_arn_path = key_aws_path + "[@key_id]";
+            String key_id_arn_path = key_aws_path + "[@key_arn]";
             if (!config.has(key_id_arn_path))
                 throw Exception(ErrorCodes::BAD_ARGUMENTS, "Missing key_id for key_aws {}", key_aws_path);
             String key_id_arn = config.getString(key_id_arn_path);

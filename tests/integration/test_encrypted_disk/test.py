@@ -4,6 +4,8 @@ from helpers.cluster import ClickHouseCluster
 from helpers.client import QueryRuntimeException
 import os.path
 from helpers.test_tools import assert_eq_with_retry
+import requests
+import json
 
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 
@@ -19,7 +21,6 @@ node = cluster.add_instance(
     with_local_kms=True,
     stay_alive=True,
 )
-
 
 @pytest.fixture(scope="module", autouse=True)
 def start_cluster():
@@ -581,3 +582,56 @@ def test_backup_restore(
     else:
         node.query(restore_command)
         assert node.query(select_query) == "(0,'data'),(1,'data')"
+
+
+# Test adding AWSencryption key on the fly.
+def test_add_aws_keys():
+    secret_key = "firstfirstfirstf"
+    keys = f"<key>{secret_key}</key>"
+    make_storage_policy_with_keys(
+        "encrypted_policy_multikeys", keys, check_system_storage_policies=True
+    )
+
+    # Add some data to an encrypted disk.
+    node.query(
+        """
+        CREATE TABLE encrypted_test (
+            id Int64,
+            data String
+        ) ENGINE=MergeTree()
+        ORDER BY id
+        SETTINGS storage_policy='encrypted_policy_multikeys'
+        """
+    )
+
+    node.query("INSERT INTO encrypted_test VALUES (0,'data'),(1,'data')")
+    select_query = "SELECT * FROM encrypted_test ORDER BY id FORMAT Values"
+    assert node.query(select_query) == "(0,'data'),(1,'data')"
+
+    # Create KMS encryption key
+    headers = {
+        "Content-Type": "application/json",
+        "X-Amz-Target": "TrentService.CreateKey",
+    }
+    res = requests.post(cluster.local_kms_url, headers=headers)
+    assert res.status_code == 200
+    res_json = json.loads(res.text)
+    assert res_json["KeyMetadata"]
+    key_arn = res_json["KeyMetadata"]["Arn"]
+    key_id = res_json["KeyMetadata"]["KeyId"]
+
+    # Encrypt secret key with KMS
+    headers["X-Amz-Target"] = "TrentService.Encrypt"
+    res = requests.post(cluster.local_kms_url, headers=headers, json={"KeyId": key_id, "Plaintext": secret_key})
+    assert res.status_code == 200
+    res_json = json.loads(res.text)
+    key_encrypted_base64 = res_json["CiphertextBlob"]
+
+    # Exchange the new encrypted key through KMS with the original one
+    keys = f"<key_aws key_arn=\"{key_arn}\">{key_encrypted_base64}</key_aws>"
+    make_storage_policy_with_keys(
+        "encrypted_policy_multikeys", keys, check_system_storage_policies=True
+    )
+
+    select_query = "SELECT * FROM encrypted_test ORDER BY id FORMAT Values"
+    assert node.query(select_query) == "(0,'data'),(1,'data')"

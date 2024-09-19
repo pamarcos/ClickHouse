@@ -764,7 +764,8 @@ class ClickHouseCluster:
 
         # available when with_local_kms == True
         self.local_kms_host = "local_kms"
-        self.local_kms_port = "4599"
+        self.local_kms_port = "8080"
+        self.local_kms_url = None
 
         self.docker_client = None
         self.is_up = False
@@ -2845,16 +2846,17 @@ class ClickHouseCluster:
 
     def wait_local_kms_to_start(self, timeout=15):
         local_kms_ip = self.get_instance_ip(self.local_kms_host)
-        url = f"http://{local_kms_ip}:{self.local_kms_port}"
+        self.local_kms_url = f"http://{local_kms_ip}:{self.local_kms_port}"
+        self.env_variables["AWS_KMS_ENDPOINT"] = self.local_kms_url
         start = time.time()
         while time.time() - start < timeout:
             try:
-                logging.info(f"Check Local KMS Online at {url}")
+                logging.info(f"Check Local KMS Online at {self.local_kms_url}")
                 headers = {
                     "Content-Type": "application/json",
                     "X-Amz-Target": "TrentService.ListKeys",
                 }
-                requests.post(url, headers).raise_for_status()
+                requests.post(self.local_kms_url, headers=headers).raise_for_status()
                 logging.info("Local KMS Online")
                 return
             except Exception as ex:
@@ -3227,8 +3229,7 @@ class ClickHouseCluster:
                 subprocess_check_call(self.base_local_kms_cmd + common_opts)
                 self.up_called = True
                 self.wait_local_kms_to_start()
-                import sys
-                sys.exit(1)
+
 
             clickhouse_start_cmd = self.base_cmd + ["up", "-d", "--no-recreate"]
             logging.debug(
