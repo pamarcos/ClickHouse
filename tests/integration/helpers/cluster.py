@@ -553,6 +553,7 @@ class ClickHouseCluster:
         self.with_nginx = False
         self.with_hive = False
         self.with_coredns = False
+        self.with_local_kms = False
 
         # available when with_minio == True
         self.with_minio = False
@@ -760,6 +761,10 @@ class ClickHouseCluster:
         self.prometheus_remote_read_handler_host = None
         self.prometheus_remote_read_handler_port = 9092
         self.prometheus_remote_read_handler_path = "/read"
+
+        # available when with_local_kms == True
+        self.local_kms_host = "local_kms"
+        self.local_kms_port = "4599"
 
         self.docker_client = None
         self.is_up = False
@@ -1679,6 +1684,23 @@ class ClickHouseCluster:
             ]
         return self.base_prometheus_cmd
 
+    def setup_local_kms_cmd(self, instance, env_variables, docker_compose_yml_dir):
+        self.with_local_kms = True
+
+        self.base_cmd.extend(
+            ["--file", p.join(docker_compose_yml_dir, "docker_compose_local_kms.yml")]
+        )
+        self.base_local_kms_cmd = [
+            "docker-compose",
+            "--env-file",
+            instance.env_file,
+            "--project-name",
+            self.project_name,
+            "--file",
+            p.join(docker_compose_yml_dir, "docker_compose_local_kms.yml"),
+        ]
+        return self.base_local_kms_cmd
+
     def add_instance(
         self,
         name,
@@ -1720,6 +1742,7 @@ class ClickHouseCluster:
         with_hive=False,
         with_coredns=False,
         with_prometheus=False,
+        with_local_kms=False,
         handle_prometheus_remote_write=False,
         handle_prometheus_remote_read=False,
         use_old_analyzer=None,
@@ -1822,6 +1845,7 @@ class ClickHouseCluster:
             with_coredns=with_coredns,
             with_cassandra=with_cassandra,
             with_ldap=with_ldap,
+            with_local_kms=with_local_kms,
             use_old_analyzer=use_old_analyzer,
             server_bin_path=self.server_bin_path,
             odbc_bridge_bin_path=self.odbc_bridge_bin_path,
@@ -2077,6 +2101,11 @@ class ClickHouseCluster:
                 )
             )
 
+        if with_local_kms and not self.with_local_kms:
+            cmds.append(
+                self.setup_local_kms_cmd(instance, env_variables, docker_compose_yml_dir)
+            )
+
         logging.debug(
             "Cluster name:{} project_name:{}. Added instance name:{} tag:{} base_cmd:{} docker_compose_yml_dir:{}".format(
                 self.name,
@@ -2137,7 +2166,7 @@ class ClickHouseCluster:
         logging.debug("get_instance_ip instance_name={}".format(instance_name))
         docker_id = self.get_instance_docker_id(instance_name)
         # for cont in self.docker_client.containers.list():
-        # logging.debug("CONTAINERS LIST: ID={} NAME={} STATUS={}".format(cont.id, cont.name, cont.status))
+        #     logging.debug("CONTAINERS LIST: ID={} NAME={} STATUS={}".format(cont.id, cont.name, cont.status))
         handle = self.docker_client.containers.get(docker_id)
         return list(handle.attrs["NetworkSettings"]["Networks"].values())[0][
             "IPAddress"
@@ -2814,6 +2843,26 @@ class ClickHouseCluster:
 
         raise Exception("Can't wait LDAP to start")
 
+    def wait_local_kms_to_start(self, timeout=15):
+        local_kms_ip = self.get_instance_ip(self.local_kms_host)
+        url = f"http://{local_kms_ip}:{self.local_kms_port}"
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                logging.info(f"Check Local KMS Online at {url}")
+                headers = {
+                    "Content-Type": "application/json",
+                    "X-Amz-Target": "TrentService.ListKeys",
+                }
+                requests.post(url, headers).raise_for_status()
+                logging.info("Local KMS Online")
+                return
+            except Exception as ex:
+                logging.warning("Can't connect to Local KMS: %s", str(ex))
+                time.sleep(1)
+
+        raise Exception("Can't wait Local KMS to start")
+
     def start(self):
         pytest_xdist_logging_to_separate_files.setup()
         logging.info("Running tests in {}".format(self.base_path))
@@ -3173,6 +3222,14 @@ class ClickHouseCluster:
                 os.makedirs(self.prometheus_reader_logs_dir)
                 os.chmod(self.prometheus_reader_logs_dir, stat.S_IRWXU | stat.S_IRWXO)
 
+            if self.with_local_kms and self.base_local_kms_cmd:
+                logging.debug("Setup Local KMS")
+                subprocess_check_call(self.base_local_kms_cmd + common_opts)
+                self.up_called = True
+                self.wait_local_kms_to_start()
+                import sys
+                sys.exit(1)
+
             clickhouse_start_cmd = self.base_cmd + ["up", "-d", "--no-recreate"]
             logging.debug(
                 (
@@ -3441,6 +3498,7 @@ class ClickHouseInstance:
         with_coredns,
         with_cassandra,
         with_ldap,
+        with_local_kms,
         use_old_analyzer,
         server_bin_path,
         odbc_bridge_bin_path,
@@ -3535,6 +3593,7 @@ class ClickHouseInstance:
         self.with_jdbc_bridge = with_jdbc_bridge
         self.with_hive = with_hive
         self.with_coredns = with_coredns
+        self.with_local_kms = with_local_kms
         self.coredns_config_dir = p.abspath(p.join(base_path, "coredns_config"))
         self.use_old_analyzer = use_old_analyzer
         self.randomize_settings = randomize_settings

@@ -16,6 +16,7 @@ node = cluster.add_instance(
     tmpfs=["/disk:size=100M"],
     external_dirs=["/backups/"],
     with_minio=True,
+    with_local_kms=True,
     stay_alive=True,
 )
 
