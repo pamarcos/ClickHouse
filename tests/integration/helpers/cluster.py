@@ -2847,7 +2847,6 @@ class ClickHouseCluster:
     def wait_local_kms_to_start(self, timeout=15):
         local_kms_ip = self.get_instance_ip(self.local_kms_host)
         self.local_kms_url = f"http://{local_kms_ip}:{self.local_kms_port}"
-        self.env_variables["AWS_KMS_ENDPOINT"] = self.local_kms_url
         start = time.time()
         while time.time() - start < timeout:
             try:

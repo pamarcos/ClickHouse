@@ -50,11 +50,17 @@ namespace
         }
     }
 
-    String getDecryptedKeyUsingAwsKms(const String & key_id_arn, const String & encrypted_key)
+    String getDecryptedKeyUsingAwsKms(const Poco::Util::AbstractConfiguration & config, const String & config_prefix, const String & key_path)
     {
-        auto logger = getLogger("PMO");
+        auto logger = getLogger("DiskEncrypted");
 
-        auto config = S3::ClientFactory::instance().createClientConfiguration(
+        String key_id_arn_path = key_path + "[@key_arn]";
+        if (!config.has(key_id_arn_path))
+            throw Exception(ErrorCodes::BAD_ARGUMENTS, "Missing key_arn for key_aws {}", key_path);
+        String key_id_arn = config.getString(key_id_arn_path);
+        String encrypted_key = config.getString(key_path);
+
+        auto client_config = S3::ClientFactory::instance().createClientConfiguration(
             Aws::Environment::GetEnv("AWS_DEFAULT_REGION"),
             RemoteHostFilter(),
             /* s3_max_redirects = */ 10,
@@ -65,22 +71,24 @@ namespace
             /* put_request_throttler = */ {}
         );
 
-        S3::CredentialsConfiguration credentials_configuration{ .use_environment_credentials = true };
+        const auto no_sign_request = config.getBool(config_prefix + ".no_sign_request", false);
+        S3::CredentialsConfiguration credentials_configuration{ .use_environment_credentials = true , .no_sign_request = no_sign_request};
+
+        const auto new_kms_endpoint = config.getString(config_prefix + ".aws_kms_endpoint", "");
+        if (!new_kms_endpoint.empty())
+        {
+            LOG_INFO(logger, "Using AWS KMS endpoint: {}", new_kms_endpoint);
+            client_config.endpointOverride = new_kms_endpoint;
+        }
+
         S3::S3CredentialsProviderChain credentials_provider(
-            config,
+            client_config,
             {},
             credentials_configuration);
 
         auto credentials = credentials_provider.GetAWSCredentials();
 
-        const auto new_kms_endpoint = Aws::Environment::GetEnv("AWS_KMS_ENDPOINT");
-        if (!new_kms_endpoint.empty())
-        {
-            LOG_INFO(getLogger("DiskEncrypted"), "Using AWS KMS endpoint: {}", new_kms_endpoint);
-            config.endpointOverride = new_kms_endpoint;
-        }
-
-        Aws::KMS::KMSClient kms_client(credentials, config);
+        Aws::KMS::KMSClient kms_client(credentials, client_config);
         Aws::KMS::Model::DecryptRequest decrypt_request;
         const auto encrypted_key_plain = base64Decode(encrypted_key);
         decrypt_request.WithKeyId(key_id_arn).WithCiphertextBlob(Aws::Utils::ByteBuffer(reinterpret_cast<const unsigned char *>(encrypted_key_plain.data()), encrypted_key_plain.size()));
@@ -94,7 +102,7 @@ namespace
             return decrypted_key;
         }
 
-        throw Exception(ErrorCodes::AWS_ERROR, "Error decrypting key using key_id {}: {}", key_id_arn, decrypt_outcome.GetError().GetMessage());
+        throw Exception(ErrorCodes::AWS_ERROR, "Error decrypting key using key_arn {}: {}", key_id_arn, decrypt_outcome.GetError().GetMessage());
     }
 
     /// Reads encryption keys from the configuration.
@@ -131,11 +139,7 @@ namespace
                 String key_id_path = key_path + "[@id]";
                 if (config.has(key_id_path))
                     key_id = config.getUInt64(key_id_path);
-                String key_id_arn_path = key_path + "[@key_arn]";
-                if (!config.has(key_id_arn_path))
-                    throw Exception(ErrorCodes::BAD_ARGUMENTS, "Missing key_id for key_aws {}", config_key);
-                String key_id_arn = config.getString(key_id_arn_path);
-                key = getDecryptedKeyUsingAwsKms(key_id_arn, config.getString(key_path));
+                key = getDecryptedKeyUsingAwsKms(config, config_prefix, key_path);
             }
             else
                 continue;
@@ -202,11 +206,7 @@ namespace
         }
         else if (config.has(key_aws_path))
         {
-            String key_id_arn_path = key_aws_path + "[@key_arn]";
-            if (!config.has(key_id_arn_path))
-                throw Exception(ErrorCodes::BAD_ARGUMENTS, "Missing key_id for key_aws {}", key_aws_path);
-            String key_id_arn = config.getString(key_id_arn_path);
-            String current_key = getDecryptedKeyUsingAwsKms(key_id_arn, config.getString(key_aws_path));
+            String current_key = getDecryptedKeyUsingAwsKms(config, config_prefix, key_aws_path);
             check_current_key_found(current_key);
             return current_key;
         }

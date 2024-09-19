@@ -628,7 +628,10 @@ def test_add_aws_keys():
     key_encrypted_base64 = res_json["CiphertextBlob"]
 
     # Exchange the new encrypted key through KMS with the original one
-    keys = f"<key_aws key_arn=\"{key_arn}\">{key_encrypted_base64}</key_aws>"
+    keys = f"""<no_sign_request>true</no_sign_request>
+            <aws_kms_endpoint>{cluster.local_kms_url}</aws_kms_endpoint>
+            <key_aws key_arn=\"{key_arn}\">{key_encrypted_base64}</key_aws>"""
+
     make_storage_policy_with_keys(
         "encrypted_policy_multikeys", keys, check_system_storage_policies=True
     )
