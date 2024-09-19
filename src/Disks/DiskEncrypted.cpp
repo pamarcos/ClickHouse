@@ -65,8 +65,13 @@ namespace
             /* put_request_throttler = */ {}
         );
 
-        S3::AwsAuthSTSAssumeRoleWebIdentityCredentialsProvider aws(config, 120);
-        auto credentials = aws.GetAWSCredentials();
+        S3::CredentialsConfiguration credentials_configuration{ .use_environment_credentials = true };
+        S3::S3CredentialsProviderChain credentials_provider(
+            config,
+            {},
+            credentials_configuration);
+
+        auto credentials = credentials_provider.GetAWSCredentials();
 
         const auto new_kms_endpoint = Aws::Environment::GetEnv("AWS_KMS_ENDPOINT");
         if (!new_kms_endpoint.empty())
