@@ -50,10 +50,10 @@ namespace
         }
     }
 
-    String getDecryptedKeyUsingAwsKms(const String & key_id_arn, const String & encrypted_key, const String & role_arn)
+    String getDecryptedKeyUsingAwsKms(const String & key_id_arn, const String & encrypted_key)
     {
         auto logger = getLogger("PMO");
-        LOG_DEBUG(logger, "getDecryptedKeyUsingAwsKms for encrypted_key {}, role_arn {}", encrypted_key, role_arn);
+        LOG_DEBUG(logger, "getDecryptedKeyUsingAwsKms for encrypted_key {}", encrypted_key);
 
         auto config = S3::ClientFactory::instance().createClientConfiguration(
             Aws::Environment::GetEnv("AWS_DEFAULT_REGION"),
@@ -71,7 +71,12 @@ namespace
 
         LOG_DEBUG(logger, "access_key_id {}, secret_access_key {}, session_token {}", credentials.GetAWSAccessKeyId(), credentials.GetAWSSecretKey(), credentials.GetSessionToken());
 
-        LOG_DEBUG(logger, "Decrypting text...");
+        const auto new_kms_endpoint = Aws::Environment::GetEnv("AWS_KMS_ENDPOINT");
+        if (!new_kms_endpoint.empty())
+        {
+            LOG_INFO(getLogger("DiskEncrypted"), "Using AWS KMS endpoint: {}", new_kms_endpoint);
+            config.endpointOverride = new_kms_endpoint;
+        }
         Aws::KMS::KMSClient kms_client(credentials, config);
         Aws::KMS::Model::DecryptRequest decrypt_request;
         decrypt_request.WithKeyId(key_id_arn).WithCiphertextBlob(Aws::Utils::ByteBuffer(reinterpret_cast<const unsigned char *>(encrypted_key.data()), encrypted_key.size()));
@@ -126,11 +131,7 @@ namespace
                 if (!config.has(key_id_arn_path))
                     throw Exception(ErrorCodes::BAD_ARGUMENTS, "Missing key_id for key_aws {}", config_key);
                 String key_id_arn = config.getString(key_id_arn_path);
-                String role_arn;
-                String role_arn_path = key_path + "[@role]";
-                if (config.has(role_arn_path))
-                    role_arn = config.getString(role_arn_path);
-                key = getDecryptedKeyUsingAwsKms(key_id_arn, config.getString(key_path), role_arn);
+                key = getDecryptedKeyUsingAwsKms(key_id_arn, config.getString(key_path));
             }
             else
                 continue;
@@ -201,11 +202,7 @@ namespace
             if (!config.has(key_id_arn_path))
                 throw Exception(ErrorCodes::BAD_ARGUMENTS, "Missing key_id for key_aws {}", key_aws_path);
             String key_id_arn = config.getString(key_id_arn_path);
-            String role_arn;
-            String role_arn_path = key_aws_path + "[@role]";
-            if (!config.has(role_arn_path))
-                role_arn = config.getString(role_arn_path);
-            String current_key = getDecryptedKeyUsingAwsKms(key_id_arn, config.getString(key_aws_path), role_arn);
+            String current_key = getDecryptedKeyUsingAwsKms(key_id_arn, config.getString(key_aws_path));
             check_current_key_found(current_key);
             return current_key;
         }
