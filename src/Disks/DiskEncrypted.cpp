@@ -77,7 +77,7 @@ namespace
         const auto new_kms_endpoint = config.getString(config_prefix + ".aws_kms_endpoint", "");
         if (!new_kms_endpoint.empty())
         {
-            LOG_INFO(logger, "Using AWS KMS endpoint: {}", new_kms_endpoint);
+            LOG_INFO(logger, "Setting AWS KMS endpoint: {}", new_kms_endpoint);
             client_config.endpointOverride = new_kms_endpoint;
         }
 
@@ -91,6 +91,7 @@ namespace
         Aws::KMS::KMSClient kms_client(credentials, client_config);
         Aws::KMS::Model::DecryptRequest decrypt_request;
         const auto encrypted_key_plain = base64Decode(encrypted_key);
+        LOG_DEBUG(logger, "Using key_arn \"{}\" with encrypted_key \"{}\"", key_id_arn, encrypted_key);
         decrypt_request.WithKeyId(key_id_arn).WithCiphertextBlob(Aws::Utils::ByteBuffer(reinterpret_cast<const unsigned char *>(encrypted_key_plain.data()), encrypted_key_plain.size()));
         auto decrypt_outcome = kms_client.Decrypt(decrypt_request);
         if (decrypt_outcome.IsSuccess())

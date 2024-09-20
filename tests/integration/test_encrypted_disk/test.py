@@ -6,6 +6,7 @@ import os.path
 from helpers.test_tools import assert_eq_with_retry
 import requests
 import json
+import base64
 
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 
@@ -584,7 +585,7 @@ def test_backup_restore(
         assert node.query(select_query) == "(0,'data'),(1,'data')"
 
 
-# Test adding AWSencryption key on the fly.
+# Test adding AWS encryption key on the fly.
 def test_add_aws_keys():
     secret_key = "firstfirstfirstf"
     keys = f"<key>{secret_key}</key>"
@@ -608,6 +609,8 @@ def test_add_aws_keys():
     select_query = "SELECT * FROM encrypted_test ORDER BY id FORMAT Values"
     assert node.query(select_query) == "(0,'data'),(1,'data')"
 
+    # cluster.local_kms_url = "http://localhost:8080"
+
     # Create KMS encryption key
     headers = {
         "Content-Type": "application/json",
@@ -616,16 +619,23 @@ def test_add_aws_keys():
     res = requests.post(cluster.local_kms_url, headers=headers)
     assert res.status_code == 200
     res_json = json.loads(res.text)
-    assert res_json["KeyMetadata"]
     key_arn = res_json["KeyMetadata"]["Arn"]
     key_id = res_json["KeyMetadata"]["KeyId"]
 
     # Encrypt secret key with KMS
     headers["X-Amz-Target"] = "TrentService.Encrypt"
-    res = requests.post(cluster.local_kms_url, headers=headers, json={"KeyId": key_id, "Plaintext": secret_key})
+    res = requests.post(cluster.local_kms_url, headers=headers, json={"KeyId": key_id, "Plaintext": base64.b64encode(secret_key.encode()).decode()})
     assert res.status_code == 200
     res_json = json.loads(res.text)
     key_encrypted_base64 = res_json["CiphertextBlob"]
+
+    # Decrypt secret key wih KMS to ensure Local KMS works as expected
+    headers["X-Amz-Target"] = "TrentService.Decrypt"
+    res = requests.post(cluster.local_kms_url, headers=headers, json={"KeyId": key_id, "CiphertextBlob": key_encrypted_base64})
+    assert res.status_code == 200
+    res_json = json.loads(res.text)
+    key_decrypted = res_json["Plaintext"]
+    assert secret_key == base64.b64decode(key_decrypted).decode()
 
     # Exchange the new encrypted key through KMS with the original one
     keys = f"""<no_sign_request>true</no_sign_request>
