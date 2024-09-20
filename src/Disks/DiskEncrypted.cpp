@@ -58,6 +58,10 @@ namespace
         if (!config.has(key_id_arn_path))
             throw Exception(ErrorCodes::BAD_ARGUMENTS, "Missing key_arn for key_aws {}", key_path);
         String key_id_arn = config.getString(key_id_arn_path);
+        String role_arn;
+        String role_arn_path = key_path + "[@role_arn]";
+        if (config.has(role_arn_path))
+            role_arn = config.getString(role_arn_path);
         String encrypted_key = config.getString(key_path);
 
         auto client_config = S3::ClientFactory::instance().createClientConfiguration(
@@ -72,7 +76,11 @@ namespace
         );
 
         const auto no_sign_request = config.getBool(config_prefix + ".no_sign_request", false);
-        S3::CredentialsConfiguration credentials_configuration{ .use_environment_credentials = true , .no_sign_request = no_sign_request};
+        S3::CredentialsConfiguration credentials_configuration{
+            .use_environment_credentials = true,
+            .no_sign_request = no_sign_request,
+            .role_arn = role_arn,
+        };
 
         const auto new_kms_endpoint = config.getString(config_prefix + ".aws_kms_endpoint", "");
         if (!new_kms_endpoint.empty())

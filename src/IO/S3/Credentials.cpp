@@ -711,7 +711,7 @@ S3CredentialsProviderChain::S3CredentialsProviderChain(
                 configuration.for_disk_s3,
                 configuration.get_request_throttler,
                 configuration.put_request_throttler);
-            AddProvider(std::make_shared<AwsAuthSTSAssumeRoleWebIdentityCredentialsProvider>(aws_client_configuration, credentials_configuration.expiration_window_seconds));
+            AddProvider(std::make_shared<AwsAuthSTSAssumeRoleWebIdentityCredentialsProvider>(aws_client_configuration, credentials_configuration.expiration_window_seconds, credentials_configuration.role_arn));
         }
 
         AddProvider(std::make_shared<Aws::Auth::EnvironmentAWSCredentialsProvider>());
