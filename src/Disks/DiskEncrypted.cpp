@@ -114,22 +114,28 @@ namespace
         throw Exception(ErrorCodes::AWS_ERROR, "Error decrypting key using key_arn {}: {}", key_id_arn, decrypt_outcome.GetError().GetMessage());
     }
 
+    struct Key
+    {
+        String plain;
+        std::optional<String> encrypted;
+    };
+
     /// Reads encryption keys from the configuration.
     void getKeysFromConfig(const Poco::Util::AbstractConfiguration & config, const String & config_prefix,
-                           std::map<UInt64, String> & out_keys_by_id, Strings & out_keys_without_id)
+                           std::map<UInt64, Key> & out_keys_by_id, std::vector<Key>& out_keys_without_id)
     {
         Strings config_keys;
         config.keys(config_prefix, config_keys);
 
         for (const std::string & config_key : config_keys)
         {
-            String key;
+            Key key;
             std::optional<UInt64> key_id;
 
             if ((config_key == "key") || config_key.starts_with("key["))
             {
                 String key_path = config_prefix + "." + config_key;
-                key = config.getString(key_path);
+                key.plain = config.getString(key_path);
                 String key_id_path = key_path + "[@id]";
                 if (config.has(key_id_path))
                     key_id = config.getUInt64(key_id_path);
@@ -137,7 +143,7 @@ namespace
             else if ((config_key == "key_hex") || config_key.starts_with("key_hex["))
             {
                 String key_path = config_prefix + "." + config_key;
-                key = unhexKey(config.getString(key_path));
+                key.plain = unhexKey(config.getString(key_path));
                 String key_id_path = key_path + "[@id]";
                 if (config.has(key_id_path))
                     key_id = config.getUInt64(key_id_path);
@@ -148,7 +154,8 @@ namespace
                 String key_id_path = key_path + "[@id]";
                 if (config.has(key_id_path))
                     key_id = config.getUInt64(key_id_path);
-                key = getDecryptedKeyUsingAwsKms(config, config_prefix, key_path);
+                key.plain = getDecryptedKeyUsingAwsKms(config, config_prefix, key_path);
+                key.encrypted = config.getString(key_path);
             }
             else
                 continue;
@@ -176,7 +183,7 @@ namespace
 
     /// Reads the current encryption key from the configuration.
     String getCurrentKeyFromConfig(const Poco::Util::AbstractConfiguration & config, const String & config_prefix,
-                                   const std::map<UInt64, String> & keys_by_id, const Strings & keys_without_id)
+                                   const std::map<UInt64, Key> & keys_by_id, const std::vector<Key> & keys_without_id)
     {
         String key_path = config_prefix + ".current_key";
         String key_hex_path = config_prefix + ".current_key_hex";
@@ -190,13 +197,19 @@ namespace
         {
             for (const auto & [_, key] : keys_by_id)
             {
-                if (key == current_key_)
-                    return;
+                if (key.plain == current_key_)
+                    return current_key_;
+
+                if (key.encrypted.value_or("") == current_key_)
+                    return key.plain;
             }
             for (const auto & key : keys_without_id)
             {
-                if (key == current_key_)
-                    return;
+                if (key.plain == current_key_)
+                    return current_key_;
+
+                if (key.encrypted.value_or("") == current_key_)
+                    return key.plain;
             }
             throw Exception(ErrorCodes::BAD_ARGUMENTS, "The current key is not found in keys");
         };
@@ -204,20 +217,17 @@ namespace
         if (config.has(key_path))
         {
             String current_key = config.getString(key_path);
-            check_current_key_found(current_key);
-            return current_key;
+            return check_current_key_found(current_key);
         }
         else if (config.has(key_hex_path))
         {
             String current_key = unhexKey(config.getString(key_hex_path));
-            check_current_key_found(current_key);
-            return current_key;
+            return check_current_key_found(current_key);
         }
         else if (config.has(key_aws_path))
         {
-            String current_key = getDecryptedKeyUsingAwsKms(config, config_prefix, key_aws_path);
-            check_current_key_found(current_key);
-            return current_key;
+            String current_key = config.getString(key_aws_path);
+            return check_current_key_found(current_key);
         }
         else if (config.has(key_id_path))
         {
@@ -225,12 +235,12 @@ namespace
             auto it = keys_by_id.find(current_key_id);
             if (it == keys_by_id.end())
                 throw Exception(ErrorCodes::BAD_ARGUMENTS, "Not found a key with the current ID {}", current_key_id);
-            return it->second;
+            return it->second.plain;
         }
         else if (keys_by_id.size() == 1 && keys_without_id.empty() && keys_by_id.begin()->first == 0)
         {
             /// There is only a single key defined with id=0, so we can choose it as current.
-            return keys_by_id.begin()->second;
+            return keys_by_id.begin()->second.plain;
         }
         else
         {
@@ -279,12 +289,13 @@ namespace
         {
             auto res = std::make_unique<DiskEncryptedSettings>();
 
-            std::map<UInt64, String> keys_by_id;
-            Strings keys_without_id;
+            std::map<UInt64, Key> keys_by_id;
+            std::vector<Key> keys_without_id;
             getKeysFromConfig(config, config_prefix, keys_by_id, keys_without_id);
 
-            for (const auto & [key_id, key] : keys_by_id)
+            for (const auto & [key_id, key_entry] : keys_by_id)
             {
+                const auto key = key_entry.plain;
                 auto fingerprint = calculateKeyFingerprint(key);
                 res->all_keys[fingerprint] = key;
 
@@ -296,8 +307,8 @@ namespace
 
             for (const auto & key : keys_without_id)
             {
-                auto fingerprint = calculateKeyFingerprint(key);
-                res->all_keys[fingerprint] = key;
+                auto fingerprint = calculateKeyFingerprint(key.plain);
+                res->all_keys[fingerprint] = key.plain;
             }
 
             String current_key = getCurrentKeyFromConfig(config, config_prefix, keys_by_id, keys_without_id);

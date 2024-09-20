@@ -585,10 +585,40 @@ def test_backup_restore(
         assert node.query(select_query) == "(0,'data'),(1,'data')"
 
 
+def _create_aws_kms_key(key):
+    # Create KMS encryption key
+    headers = {
+        "Content-Type": "application/json",
+        "X-Amz-Target": "TrentService.CreateKey",
+    }
+    res = requests.post(cluster.local_kms_url, headers=headers)
+    assert res.status_code == 200
+    res_json = json.loads(res.text)
+    key_arn = res_json["KeyMetadata"]["Arn"]
+    key_id = res_json["KeyMetadata"]["KeyId"]
+
+    # Encrypt secret key with KMS
+    headers["X-Amz-Target"] = "TrentService.Encrypt"
+    res = requests.post(cluster.local_kms_url, headers=headers, json={"KeyId": key_id, "Plaintext": base64.b64encode(key.encode()).decode()})
+    assert res.status_code == 200
+    res_json = json.loads(res.text)
+    key_encrypted_base64 = res_json["CiphertextBlob"]
+
+    # Decrypt secret key wih KMS to ensure Local KMS works as expected
+    headers["X-Amz-Target"] = "TrentService.Decrypt"
+    res = requests.post(cluster.local_kms_url, headers=headers, json={"KeyId": key_id, "CiphertextBlob": key_encrypted_base64})
+    assert res.status_code == 200
+    res_json = json.loads(res.text)
+    key_decrypted = res_json["Plaintext"]
+    assert key == base64.b64decode(key_decrypted).decode()
+
+    return key_arn, key_encrypted_base64
+
+
 # Test adding AWS encryption key on the fly.
 def test_add_aws_keys():
-    secret_key = "firstfirstfirstf"
-    keys = f"<key>{secret_key}</key>"
+    key1 = "firstfirstfirstf"
+    keys = f"<key>{key1}</key>"
     make_storage_policy_with_keys(
         "encrypted_policy_multikeys", keys, check_system_storage_policies=True
     )
@@ -609,38 +639,12 @@ def test_add_aws_keys():
     select_query = "SELECT * FROM encrypted_test ORDER BY id FORMAT Values"
     assert node.query(select_query) == "(0,'data'),(1,'data')"
 
-    # cluster.local_kms_url = "http://localhost:8080"
-
-    # Create KMS encryption key
-    headers = {
-        "Content-Type": "application/json",
-        "X-Amz-Target": "TrentService.CreateKey",
-    }
-    res = requests.post(cluster.local_kms_url, headers=headers)
-    assert res.status_code == 200
-    res_json = json.loads(res.text)
-    key_arn = res_json["KeyMetadata"]["Arn"]
-    key_id = res_json["KeyMetadata"]["KeyId"]
-
-    # Encrypt secret key with KMS
-    headers["X-Amz-Target"] = "TrentService.Encrypt"
-    res = requests.post(cluster.local_kms_url, headers=headers, json={"KeyId": key_id, "Plaintext": base64.b64encode(secret_key.encode()).decode()})
-    assert res.status_code == 200
-    res_json = json.loads(res.text)
-    key_encrypted_base64 = res_json["CiphertextBlob"]
-
-    # Decrypt secret key wih KMS to ensure Local KMS works as expected
-    headers["X-Amz-Target"] = "TrentService.Decrypt"
-    res = requests.post(cluster.local_kms_url, headers=headers, json={"KeyId": key_id, "CiphertextBlob": key_encrypted_base64})
-    assert res.status_code == 200
-    res_json = json.loads(res.text)
-    key_decrypted = res_json["Plaintext"]
-    assert secret_key == base64.b64decode(key_decrypted).decode()
+    key1_arn, key1_encrypted_base64 = _create_aws_kms_key(key1)
 
     # Exchange the new encrypted key through KMS with the original one
     keys = f"""<no_sign_request>true</no_sign_request>
             <aws_kms_endpoint>{cluster.local_kms_url}</aws_kms_endpoint>
-            <key_aws key_arn=\"{key_arn}\">{key_encrypted_base64}</key_aws>"""
+            <key_aws key_arn="{key1_arn}">{key1_encrypted_base64}</key_aws>"""
 
     make_storage_policy_with_keys(
         "encrypted_policy_multikeys", keys, check_system_storage_policies=True
@@ -648,3 +652,50 @@ def test_add_aws_keys():
 
     select_query = "SELECT * FROM encrypted_test ORDER BY id FORMAT Values"
     assert node.query(select_query) == "(0,'data'),(1,'data')"
+
+    # Ensure current_key_aws works
+    key2 = "secondsecondseco"
+    key2_arn, key2_encrypted_base64 = _create_aws_kms_key(key2)
+    keys = f"""<no_sign_request>true</no_sign_request>
+            <aws_kms_endpoint>{cluster.local_kms_url}</aws_kms_endpoint>
+            <key_aws key_arn="{key1_arn}">{key1_encrypted_base64}</key_aws>
+            <key_aws key_arn="{key2_arn}">{key2_encrypted_base64}</key_aws>
+            <current_key_aws>{key2_encrypted_base64}</current_key_aws>"""
+
+    make_storage_policy_with_keys(
+        "encrypted_policy_multikeys", keys, check_system_storage_policies=True
+    )
+
+    node.query("INSERT INTO encrypted_test VALUES (2,'data'),(3,'data')")
+
+    # Now "(0,'data'),(1,'data')" is encrypted with the first key and "(2,'data'),(3,'data')" is encrypted with the second key.
+    # All data are accessible.
+    assert node.query(select_query) == "(0,'data'),(1,'data'),(2,'data'),(3,'data')"
+
+    # Keys can be reordered
+    keys = f"""<no_sign_request>true</no_sign_request>
+            <aws_kms_endpoint>{cluster.local_kms_url}</aws_kms_endpoint>
+            <key_aws id="1" key_arn="{key2_arn}">{key2_encrypted_base64}</key_aws>
+            <key_aws id="0" key_arn="{key1_arn}">{key1_encrypted_base64}</key_aws>
+            <current_key_id>1</current_key_id>"""
+
+    make_storage_policy_with_keys(
+        "encrypted_policy_multikeys", keys, check_system_storage_policies=True
+    )
+
+    assert node.query(select_query) == "(0,'data'),(1,'data'),(2,'data'),(3,'data')"
+
+    # Try to replace the first key with something wrong, and check that "(0,'data'),(1,'data')" cannot be read.
+    keys = f"""<no_sign_request>true</no_sign_request>
+            <aws_kms_endpoint>{cluster.local_kms_url}</aws_kms_endpoint>
+            <key_aws id="1" key_arn="{key2_arn}">{key2_encrypted_base64}</key_aws>
+            <key id="0">wrongkey</key>
+            <current_key_id>1</current_key_id>"""
+    make_storage_policy_with_keys("encrypted_policy_multikeys", keys)
+
+    expected_error = "Not found an encryption key required to decipher"
+    assert expected_error in node.query_and_get_error(select_query)
+
+    # Detach the part encrypted with the wrong key and check that another part containing "(2,'data'),(3,'data')" still can be read.
+    node.query("ALTER TABLE encrypted_test DETACH PART '{}'".format(FIRST_PART_NAME))
+    assert node.query(select_query) == "(2,'data'),(3,'data')"
