@@ -23,6 +23,7 @@ node = cluster.add_instance(
     stay_alive=True,
 )
 
+
 @pytest.fixture(scope="module", autouse=True)
 def start_cluster():
     try:
@@ -599,14 +600,22 @@ def _create_aws_kms_key(key):
 
     # Encrypt secret key with KMS
     headers["X-Amz-Target"] = "TrentService.Encrypt"
-    res = requests.post(cluster.local_kms_url, headers=headers, json={"KeyId": key_id, "Plaintext": base64.b64encode(key.encode()).decode()})
+    res = requests.post(
+        cluster.local_kms_url,
+        headers=headers,
+        json={"KeyId": key_id, "Plaintext": base64.b64encode(key.encode()).decode()},
+    )
     assert res.status_code == 200
     res_json = json.loads(res.text)
     key_encrypted_base64 = res_json["CiphertextBlob"]
 
     # Decrypt secret key wih KMS to ensure Local KMS works as expected
     headers["X-Amz-Target"] = "TrentService.Decrypt"
-    res = requests.post(cluster.local_kms_url, headers=headers, json={"KeyId": key_id, "CiphertextBlob": key_encrypted_base64})
+    res = requests.post(
+        cluster.local_kms_url,
+        headers=headers,
+        json={"KeyId": key_id, "CiphertextBlob": key_encrypted_base64},
+    )
     assert res.status_code == 200
     res_json = json.loads(res.text)
     key_decrypted = res_json["Plaintext"]

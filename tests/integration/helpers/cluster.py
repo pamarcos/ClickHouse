@@ -2104,7 +2104,9 @@ class ClickHouseCluster:
 
         if with_local_kms and not self.with_local_kms:
             cmds.append(
-                self.setup_local_kms_cmd(instance, env_variables, docker_compose_yml_dir)
+                self.setup_local_kms_cmd(
+                    instance, env_variables, docker_compose_yml_dir
+                )
             )
 
         logging.debug(
@@ -3228,7 +3230,6 @@ class ClickHouseCluster:
                 subprocess_check_call(self.base_local_kms_cmd + common_opts)
                 self.up_called = True
                 self.wait_local_kms_to_start()
-
 
             clickhouse_start_cmd = self.base_cmd + ["up", "-d", "--no-recreate"]
             logging.debug(
