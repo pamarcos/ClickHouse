@@ -15,10 +15,14 @@
 #include <Common/quoteString.h>
 #include <Common/typeid_cast.h>
 
+#if USE_AWS_S3
+
 #include <aws/core/platform/Environment.h>
 #include <aws/core/client/AWSJsonClient.h>
 #include <aws/kms/KMSClient.h>
 #include <aws/kms/model/DecryptRequest.h>
+
+#endif
 
 namespace DB
 {
@@ -49,6 +53,8 @@ namespace
             throw Exception(ErrorCodes::BAD_ARGUMENTS, "Cannot read key_hex, check for valid characters [0-9a-fA-F] and length");
         }
     }
+
+#if USE_AWS_S3
 
     String getDecryptedKeyUsingAwsKms(const Poco::Util::AbstractConfiguration & config, const String & config_prefix, const String & key_path)
     {
@@ -111,6 +117,15 @@ namespace
 
         throw Exception(ErrorCodes::AWS_ERROR, "Error decrypting key using key_arn {}: {}", key_id_arn, decrypt_outcome.GetError().GetMessage());
     }
+
+#else
+
+    String getDecryptedKeyUsingAwsKms([[maybe_unused]] const Poco::Util::AbstractConfiguration & config, [[maybe_unused]] const String & config_prefix, [[maybe_unused]] const String & key_path)
+    {
+        throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Not implemented. Compile with USE_AWS_S3=1 for AWS KMS support");
+    }
+
+#endif
 
     struct Key
     {
