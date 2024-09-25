@@ -2852,7 +2852,7 @@ class ClickHouseCluster:
         start = time.time()
         while time.time() - start < timeout:
             try:
-                logging.info(f"Check Local KMS Online at {self.local_kms_url}")
+                logging.info(f"Check Local KMS is online at {self.local_kms_url}")
                 headers = {
                     "Content-Type": "application/json",
                     "X-Amz-Target": "TrentService.ListKeys",
