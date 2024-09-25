@@ -764,7 +764,7 @@ class ClickHouseCluster:
 
         # available when with_local_kms == True
         self.local_kms_host = "local_kms"
-        self.local_kms_port = "8080"
+        self._local_kms_port = 0
         self.local_kms_url = None
 
         self.docker_client = None
@@ -849,6 +849,13 @@ class ClickHouseCluster:
             return self._redis_port
         self._redis_port = self.port_pool.get_port()
         return self._redis_port
+
+    @property
+    def local_kms_port(self):
+        if self._local_kms_port:
+            return self._local_kms_port
+        self._local_kms_port = self.port_pool.get_port()
+        return self._local_kms_port
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.port_pool.return_used_ports()
@@ -1687,6 +1694,7 @@ class ClickHouseCluster:
 
     def setup_local_kms_cmd(self, instance, env_variables, docker_compose_yml_dir):
         self.with_local_kms = True
+        env_variables["LOCAL_KMS_PORT"] = str(self.local_kms_port)
 
         self.base_cmd.extend(
             ["--file", p.join(docker_compose_yml_dir, "docker_compose_local_kms.yml")]
@@ -2800,7 +2808,7 @@ class ClickHouseCluster:
         while time.time() - start < timeout:
             try:
                 logging.info(
-                    f"Check Cassandra Online {self.cassandra_id} {self.cassandra_ip} {self.cassandra_port}"
+                    f"Check Cassandra is Online {self.cassandra_id} {self.cassandra_ip} {self.cassandra_port}"
                 )
                 check = self.exec_in_container(
                     self.cassandra_id,
@@ -2826,7 +2834,7 @@ class ClickHouseCluster:
         start = time.time()
         while time.time() - start < timeout:
             try:
-                logging.info(f"Check LDAP Online {self.ldap_host} {self.ldap_port}")
+                logging.info(f"Check LDAP is Online {self.ldap_host} {self.ldap_port}")
                 self.exec_in_container(
                     self.ldap_id,
                     [
