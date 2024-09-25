@@ -2846,7 +2846,7 @@ class ClickHouseCluster:
 
         raise Exception("Can't wait LDAP to start")
 
-    def wait_local_kms_to_start(self, timeout=15):
+    def wait_local_kms_to_start(self, timeout=180):
         local_kms_ip = self.get_instance_ip(self.local_kms_host)
         self.local_kms_url = f"http://{local_kms_ip}:{self.local_kms_port}"
         start = time.time()
