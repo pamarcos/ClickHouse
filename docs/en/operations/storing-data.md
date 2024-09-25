@@ -499,7 +499,7 @@ Required parameters:
 - `type` — `encrypted`. Otherwise the encrypted disk is not created.
 - `disk` — Type of disk for data storage.
 - `key` — The key for encryption and decryption. Type: [Uint64](/docs/en/sql-reference/data-types/int-uint.md). You can use `key_hex` parameter to encode the key in hexadecimal form. You can specify multiple keys using the `id` attribute (see example below).
-You can also use [envelope encryption](https://cloud.google.com/kms/docs/envelope-encryption) so that the unencrypted key only lives in memory. It can be done through AWS's KMS setting the `key_aws` field (see example below), which contains a base64-encoded value. There's a mandatory `key_arn` attribute that needs to be set and an optional `role_arn`.
+You can also use [envelope encryption](https://en.wikipedia.org/wiki/Hybrid_cryptosystem#Envelope_encryption) so that the unencrypted key only lives in memory. It can be done through AWS's KMS setting the `key_aws` field (see example below), which contains a base64-encoded value. There's a mandatory `key_arn` attribute that needs to be set and an optional `role_arn`.
 
 Optional parameters:
 
